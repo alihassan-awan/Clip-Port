@@ -9,6 +9,7 @@ class ClipPortApp : Application() {
     @Volatile var initializationError: String? = null
     override fun onCreate() {
         super.onCreate()
+        DownloadQueue.initialize(applicationContext)
         Thread {
             try {
                 YoutubeDL.getInstance().init(applicationContext)

@@ -71,7 +71,7 @@ private fun ClipPortScreen(initialUrl: String) {
             ) {
                 Spacer(Modifier.height(6.dp))
                 Text("◉ ClipPort", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-                Text("Video and playlist downloads · Phase 2b", color = Muted)
+                Text("Video and playlist downloads · Phase 2c", color = Muted)
                 Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedTextField(
@@ -164,6 +164,14 @@ private fun ClipPortScreen(initialUrl: String) {
                     Card(colors = CardDefaults.cardColors(containerColor = Panel)) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text("Background downloads", fontWeight = FontWeight.Bold)
+                            Row {
+                                if (queuedItems.any { it.state == "Queued" }) {
+                                    TextButton(onClick = { beginQueue() }) { Text("Resume queue") }
+                                }
+                                if (queuedItems.any { it.state in setOf("Completed", "Failed", "Cancelled") }) {
+                                    TextButton(onClick = { DownloadQueue.clearFinished() }) { Text("Clear finished") }
+                                }
+                            }
                             queuedItems.takeLast(60).forEach { item ->
                                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(item.title, fontSize = 13.sp, maxLines = 2)
@@ -177,7 +185,7 @@ private fun ClipPortScreen(initialUrl: String) {
                                         if (item.state == "Downloading" || item.state == "Queued") TextButton(onClick = {
                                             context.startService(Intent(context,DownloadService::class.java).setAction(DownloadService.CANCEL).putExtra(DownloadService.ID,item.id))
                                         }) { Text("Cancel") }
-                                        if (item.state == "Failed" || item.state == "Cancelled") TextButton(onClick = {
+                                        if (item.state == "Failed" || item.state == "Cancelled" || item.state == "Interrupted") TextButton(onClick = {
                                             DownloadQueue.retry(item.id)
                                             beginQueue()
                                         }) { Text("Retry") }
@@ -198,7 +206,7 @@ private fun ClipPortScreen(initialUrl: String) {
                 Card(colors = CardDefaults.cardColors(containerColor = Panel)) {
                     Text(status, modifier = Modifier.fillMaxWidth().padding(16.dp))
                 }
-                Text("Phase 2b: user-started background queue. Jobs are not retained after phone reboot or app process termination.", color = Muted, fontSize = 12.sp)
+                Text("Phase 2c: queue list is saved. After restart, tap Resume queue for pending items; interrupted downloads need Retry. Partial files are not resumed.", color = Muted, fontSize = 12.sp)
                 Text("Use only for content you own or have permission to download.", color = Muted, fontSize = 12.sp)
                 Spacer(Modifier.height(10.dp))
                 Text("Built by Ali Hassan Awan", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = Muted, fontSize = 13.sp)
