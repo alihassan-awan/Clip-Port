@@ -44,7 +44,15 @@ class Downloader(private val context: Context) {
                 req.addOption("-f", format)
                 req.addOption("--merge-output-format", "mp4")
             }
-            YoutubeDL.getInstance().execute(req, { progress, _ -> onProgress(progress.coerceIn(0f, 100f)) })
+            
+YoutubeDL.getInstance().execute(
+    req,
+    UUID.randomUUID().toString(),
+    { progress, _, _ ->
+        onProgress(progress.coerceIn(0f, 100f))
+    }
+)
+
             val file = dir.listFiles()?.filter { it.isFile && !it.name.endsWith(".part") }?.maxByOrNull { it.length() }
                 ?: error("Download finished but output file was not found")
             val isAudio = choice == "Audio M4A"
