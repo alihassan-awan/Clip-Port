@@ -26,3 +26,11 @@ Built by Ali Hassan Awan.
 - Playback compatibility may vary when a selected video/audio pair uses different codecs.
 - Playlist extraction limits first 50 entries; unavailable/private videos may be skipped or fail individually.
 - Download only media you own or are authorized to save.
+
+
+## Phase 2a hotfix — media validation
+- No longer requires `--print after_move:filepath` to be present in wrapper output.
+- Selects an existing completed media file and checks for audio/video tracks using Android MediaMetadataRetriever.
+- Refuses to label a silent video as a successful download.
+- If no merged file exists, see yt-dlp/FFmpeg device logs: this patch cannot manufacture a missing audio track.
+- APK compilation and device playback remain to be tested.

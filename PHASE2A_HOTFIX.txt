@@ -1,0 +1,1 @@
+Phase 2a hotfix: corrected merged-media output detection and audio validation. Replace project root files in your repository, including Downloader.kt. Test a short 720p clip and 360p clip before playlists.

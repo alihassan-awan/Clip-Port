@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.os.Environment
 import android.provider.MediaStore
+import android.media.MediaMetadataRetriever
 import android.util.Log
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -98,6 +99,39 @@ class Downloader(private val context: Context) {
         else -> error("Unsupported quality: $choice")
     }
 
+    /** Prefer completed media with audio; exclude subtitle, temporary and video-only fragments. */
+    private fun locateCompletedMedia(dir: File, audioOnly: Boolean): File? {
+        val candidates = dir.listFiles().orEmpty()
+            .filter { file ->
+                file.isFile && file.length() > 0 &&
+                file.extension.lowercase() in setOf("mp4", "m4a", "webm", "mkv", "mp3") &&
+                !file.name.endsWith(".part", ignoreCase = true)
+            }
+            .sortedByDescending { it.length() }
+
+        return candidates.firstOrNull { candidate ->
+            val ext = candidate.extension.lowercase()
+            if (audioOnly && ext in setOf("m4a", "mp3")) return@firstOrNull true
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(candidate.absolutePath)
+                // Android should never save a silent video as a successful download.
+                val hasAudio = retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO
+                ) == "yes"
+                val hasVideo = retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO
+                ) == "yes"
+                hasAudio && (audioOnly || hasVideo)
+            } catch (e: Exception) {
+                Log.w(TAG, "Cannot validate media track: ${candidate.name}", e)
+                false
+            } finally {
+                try { retriever.release() } catch (_: Exception) { }
+            }
+        }
+    }
+
     suspend fun download(url: String, choice: String, onProgress: (Float) -> Unit): String = withContext(Dispatchers.IO) {
         require(isSupported(url)) { "Invalid YouTube URL" }
         ensureEngineReady()
@@ -115,14 +149,18 @@ class Downloader(private val context: Context) {
             request.addOption("-f", selectFormat(choice))
             val audioOnly = choice == "Audio M4A"
             if (!audioOnly) request.addOption("--merge-output-format", "mp4")
-            // yt-dlp prints only the final, post-processing output at this stage.
-            request.addOption("--print", "after_move:filepath")
-            val result = YoutubeDL.getInstance().execute(request, UUID.randomUUID().toString()) { percent, _, _ ->
+            // Let yt-dlp finish post-processing before inspecting output files.
+            // Some Android wrappers do not preserve --print output in result.out.
+            YoutubeDL.getInstance().execute(request, UUID.randomUUID().toString()) { percent, _, _ ->
                 onProgress(percent.coerceIn(0f, 100f))
             }
-            val finalFile = result.out.lineSequence().map { File(it.trim()) }
-                .firstOrNull { it.isFile && it.parentFile?.canonicalFile == taskDir.canonicalFile }
-                ?: error("Final merged output not identified. Check yt-dlp/FFmpeg logs; partial streams were not saved.")
+            // Use the actual finished files. Do not rely solely on yt-dlp stdout:
+            // its wrapper may suppress or alter --print after_move output.
+            val finalFile = locateCompletedMedia(taskDir, audioOnly)
+                ?: error(
+                    "No complete playable output with audio was found. " +
+                    "Check yt-dlp/FFmpeg merging logs; do not save video-only files."
+                )
             val ext = finalFile.extension.lowercase()
             val mime = when(ext) {
                 "mp4", "m4v" -> "video/mp4"
