@@ -1,6 +1,11 @@
 package com.alihassanawan.clipport
 
 import android.content.Intent
+import android.Manifest
+import android.os.Build
+import androidx.core.content.ContextCompat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -38,6 +43,15 @@ private fun ClipPortScreen(initialUrl: String) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val downloader = remember { Downloader(context.applicationContext) }
     val scope = rememberCoroutineScope()
+    val queuedItems by DownloadQueue.items.collectAsState()
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    fun beginQueue() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        ContextCompat.startForegroundService(context, Intent(context, DownloadService::class.java).setAction(DownloadService.START))
+    }
     var url by remember { mutableStateOf(initialUrl) }
     var videoTitle by remember { mutableStateOf("") }
     var playlist by remember { mutableStateOf<PlaylistDetails?>(null) }
@@ -57,7 +71,7 @@ private fun ClipPortScreen(initialUrl: String) {
             ) {
                 Spacer(Modifier.height(6.dp))
                 Text("◉ ClipPort", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-                Text("Video and playlist downloads · Phase 2a", color = Muted)
+                Text("Video and playlist downloads · Phase 2b", color = Muted)
                 Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedTextField(
@@ -134,25 +148,43 @@ private fun ClipPortScreen(initialUrl: String) {
                                 enabled = !busy && (playlist == null || selected.isNotEmpty()),
                                 modifier = Modifier.fillMaxWidth().height(52.dp),
                                 onClick = {
-                                    busy = true; currentProgress = 0f; completed = 0
-                                    val jobs = playlist?.videos?.filter { it.id in selected }?.map { it.url } ?: listOf(url)
-                                    scope.launch {
-                                        try {
-                                            jobs.forEachIndexed { index, videoUrl ->
-                                                status = "Downloading ${index + 1}/${jobs.size}..."
-                                                val message = downloader.download(videoUrl, quality) { amount ->
-                                                    scope.launch(Dispatchers.Main) { currentProgress = amount }
-                                                }
-                                                completed++
-                                                status = message
-                                            }
-                                            status = "Complete: $completed of ${jobs.size} saved in Downloads/ClipPort"
-                                        } catch (e: Exception) {
-                                            status = "Stopped after $completed completed: ${e.message ?: "Unknown error"}"
-                                        } finally { busy = false }
-                                    }
+                                    val jobs = playlist?.videos?.filter { it.id in selected }?.map {
+                                        DownloadItem(url = it.url, quality = quality, title = it.title)
+                                    } ?: listOf(DownloadItem(url = url, quality = quality, title = videoTitle))
+                                    DownloadQueue.enqueue(jobs)
+                                    beginQueue()
+                                    status = "${jobs.size} item(s) added to background queue"
+
                                 }
                             ) { Text(if (playlist != null) "Download selected (${selected.size})" else "Download to phone") }
+                        }
+                    }
+                }
+                if (queuedItems.isNotEmpty()) {
+                    Card(colors = CardDefaults.cardColors(containerColor = Panel)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Background downloads", fontWeight = FontWeight.Bold)
+                            queuedItems.takeLast(60).forEach { item ->
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(item.title, fontSize = 13.sp, maxLines = 2)
+                                    Text("${item.state} · ${item.quality} · ${item.progress.toInt()}%", color = Muted, fontSize = 12.sp)
+                                    if (item.state == "Downloading") LinearProgressIndicator(
+                                        progress = { (item.progress/100f).coerceIn(0f,1f) },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                    if (item.message.isNotBlank()) Text(item.message, color=Muted,fontSize=11.sp)
+                                    Row {
+                                        if (item.state == "Downloading" || item.state == "Queued") TextButton(onClick = {
+                                            context.startService(Intent(context,DownloadService::class.java).setAction(DownloadService.CANCEL).putExtra(DownloadService.ID,item.id))
+                                        }) { Text("Cancel") }
+                                        if (item.state == "Failed" || item.state == "Cancelled") TextButton(onClick = {
+                                            DownloadQueue.retry(item.id)
+                                            beginQueue()
+                                        }) { Text("Retry") }
+                                    }
+                                }
+                                HorizontalDivider()
+                            }
                         }
                     }
                 }
@@ -166,7 +198,7 @@ private fun ClipPortScreen(initialUrl: String) {
                 Card(colors = CardDefaults.cardColors(containerColor = Panel)) {
                     Text(status, modifier = Modifier.fillMaxWidth().padding(16.dp))
                 }
-                Text("Phase 2a: playlist queue runs while app is open. Background service and cancellation are planned for Phase 2b.", color = Muted, fontSize = 12.sp)
+                Text("Phase 2b: user-started background queue. Jobs are not retained after phone reboot or app process termination.", color = Muted, fontSize = 12.sp)
                 Text("Use only for content you own or have permission to download.", color = Muted, fontSize = 12.sp)
                 Spacer(Modifier.height(10.dp))
                 Text("Built by Ali Hassan Awan", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = Muted, fontSize = 13.sp)

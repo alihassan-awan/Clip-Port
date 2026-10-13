@@ -10,6 +10,7 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 import java.io.File
 import java.net.URI
@@ -143,7 +144,7 @@ class Downloader(private val context: Context) {
         }
     }
 
-    suspend fun download(url: String, choice: String, onProgress: (Float) -> Unit): String = withContext(Dispatchers.IO) {
+    suspend fun download(url: String, choice: String, onProgress: (Float) -> Unit, processId: String = UUID.randomUUID().toString()): String = withContext(Dispatchers.IO) {
         require(isSupported(url)) { "Invalid YouTube URL" }
         ensureEngineReady()
         val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
@@ -164,7 +165,7 @@ class Downloader(private val context: Context) {
             // Let yt-dlp finish post-processing before inspecting output files.
             // Some Android wrappers do not preserve --print output in result.out.
             val response = try {
-                YoutubeDL.getInstance().execute(request, UUID.randomUUID().toString()) { percent, _, _ ->
+                YoutubeDL.getInstance().execute(request, processId) { percent, _, _ ->
                     onProgress(percent.coerceIn(0f, 100f))
                 }
             } catch (e: Exception) {
