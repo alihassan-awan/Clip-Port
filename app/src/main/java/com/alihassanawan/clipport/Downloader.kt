@@ -220,11 +220,10 @@ class Downloader(private val context: Context) {
                 else -> "application/octet-stream"
             }
 
-            val collection = if (isAudio) {
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-            } else {
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            }
+            
+val collection =
+    MediaStore.Downloads.EXTERNAL_CONTENT_URI
+
 
             // Save the completed file to Downloads/ClipPort.
             val values = ContentValues().apply {
