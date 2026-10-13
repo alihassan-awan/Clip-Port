@@ -1,0 +1,6 @@
+Phase 2a hotfix
+- Removed obsolete com.yausername.youtubedl_android.ffmpeg.FFmpeg import and FFmpeg.init call from ClipPortApp.kt.
+- FFmpeg native dependency remains available for media merging through yt-dlp integration.
+- Keep the rest of Phase 2a playlist/download features unchanged.
+- Build has not been run here. GitHub Actions is required to confirm compilation.
+Upload the CONTENTS of ClipPort-Android/ to your repository root, not the outer folder.

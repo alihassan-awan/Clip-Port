@@ -10,7 +10,7 @@ android {
         applicationId = "com.alihassanawan.clipport"
         minSdk = 29
         targetSdk = 35
-        versionCode = 2
+        versionCode = 3
         versionName = "0.2.0-alpha"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
