@@ -56,6 +56,17 @@ class Downloader(private val context: Context) {
         }
     }
 
+    private fun writeDiagnostics(taskDir: File, message: String) {
+        try {
+            File(taskDir, "clipport-diagnostics.txt").appendText(
+                "\n--- ${System.currentTimeMillis()} ---\n$message\n"
+            )
+            Log.e(TAG, message.takeLast(4000))
+        } catch (e: Exception) {
+            Log.e(TAG, "Unable to save diagnostics", e)
+        }
+    }
+
     suspend fun analyze(url: String): String = withContext(Dispatchers.IO) {
         require(isSupported(url)) { "Enter a valid HTTPS YouTube URL" }
         ensureEngineReady()
@@ -139,6 +150,7 @@ class Downloader(private val context: Context) {
             ?: error("App download storage unavailable")
         val taskDir = File(baseDir, "tasks/${UUID.randomUUID()}")
         check(taskDir.mkdirs()) { "Cannot create temporary directory" }
+        var completedSuccessfully = false
         try {
             val request = YoutubeDLRequest(url)
             request.addOption("--no-playlist")
@@ -151,16 +163,25 @@ class Downloader(private val context: Context) {
             if (!audioOnly) request.addOption("--merge-output-format", "mp4")
             // Let yt-dlp finish post-processing before inspecting output files.
             // Some Android wrappers do not preserve --print output in result.out.
-            YoutubeDL.getInstance().execute(request, UUID.randomUUID().toString()) { percent, _, _ ->
-                onProgress(percent.coerceIn(0f, 100f))
+            val response = try {
+                YoutubeDL.getInstance().execute(request, UUID.randomUUID().toString()) { percent, _, _ ->
+                    onProgress(percent.coerceIn(0f, 100f))
+                }
+            } catch (e: Exception) {
+                // Keep diagnostic information even if yt-dlp itself fails.
+                writeDiagnostics(taskDir, "Download engine exception: ${e.stackTraceToString()}")
+                throw e
             }
+            writeDiagnostics(taskDir, "yt-dlp response\nstdout:\n${response.out}\nstderr:\n${response.err}")
             // Use the actual finished files. Do not rely solely on yt-dlp stdout:
             // its wrapper may suppress or alter --print after_move output.
             val finalFile = locateCompletedMedia(taskDir, audioOnly)
-                ?: error(
-                    "No complete playable output with audio was found. " +
-                    "Check yt-dlp/FFmpeg merging logs; do not save video-only files."
-                )
+                ?: run {
+                    writeDiagnostics(taskDir, "Media verification failed. Available files: " +
+                        taskDir.listFiles().orEmpty().joinToString { "${it.name} (${it.length()} bytes)" })
+                    error("No verified audio+video output. Diagnostic log saved in app storage. " +
+                        "Please share ClipPort diagnostics for troubleshooting.")
+                }
             val ext = finalFile.extension.lowercase()
             val mime = when(ext) {
                 "mp4", "m4v" -> "video/mp4"
@@ -192,9 +213,27 @@ class Downloader(private val context: Context) {
                 throw e
             }
             onProgress(100f)
+            completedSuccessfully = true
             "Saved to Downloads/ClipPort/${finalFile.name}"
         } finally {
-            taskDir.deleteRecursively()
+            if (completedSuccessfully) taskDir.deleteRecursively()
+            else {
+                val log = File(taskDir, "clipport-diagnostics.txt")
+                if (log.isFile) {
+                    try {
+                        val values = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, "clipport-log-${taskDir.name}.txt")
+                            put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/ClipPort")
+                        }
+                        val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        if (uri != null) context.contentResolver.openOutputStream(uri)?.use { out ->
+                            log.inputStream().use { it.copyTo(out) }
+                        }
+                    } catch (e: Exception) { Log.e(TAG, "Could not export diagnostic log", e) }
+                }
+                taskDir.deleteRecursively()
+            }
         }
     }
 }
