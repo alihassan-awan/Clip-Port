@@ -1,9 +1,7 @@
-
 package com.alihassanawan.clipport
 
 import android.content.ContentValues
 import android.content.Context
-import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
@@ -11,300 +9,153 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.net.URI
 import java.util.UUID
 
-class Downloader(private val context: Context) {
+/** Phase 2a: playlist selection, reliable output selection and merged-audio preference. */
+data class PlaylistVideo(val id: String, val title: String, val url: String)
+data class PlaylistDetails(val title: String, val videos: List<PlaylistVideo>)
 
+class Downloader(private val context: Context) {
     companion object {
         private const val TAG = "ClipPort"
-
         private val engineLock = Any()
+        @Volatile private var updateAttempted = false
 
-        @Volatile
-        private var updateAttempted = false
+        fun isSupported(raw: String): Boolean = try {
+            val uri = URI(raw.trim())
+            val host = (uri.host ?: "").lowercase()
+            uri.scheme.equals("https", true) &&
+                (host == "youtube.com" || host.endsWith(".youtube.com") || host == "youtu.be")
+        } catch (_: Exception) { false }
 
-        fun isSupported(raw: String): Boolean {
-            return try {
-                val uri = URI(raw.trim())
-                val host = (uri.host ?: "").lowercase()
-
-                uri.scheme.equals(
-                    "https",
-                    ignoreCase = true
-                ) && (
-                    host == "youtube.com" ||
-                    host.endsWith(".youtube.com") ||
-                    host == "youtu.be"
-                )
-            } catch (e: Exception) {
-                false
+        fun isPlaylist(url: String): Boolean = try {
+            val uri = URI(url.trim())
+            isSupported(url) && uri.rawQuery.orEmpty().split('&').any {
+                it.substringBefore('=') == "list" && it.substringAfter('=', "").isNotBlank()
             }
-        }
+        } catch (_: Exception) { false }
     }
 
-    // Initialize yt-dlp and check for an update.
-    // Called from Dispatchers.IO.
     private fun ensureEngineReady() {
         synchronized(engineLock) {
             val engine = YoutubeDL.getInstance()
-
             engine.init(context.applicationContext)
-
             if (!updateAttempted) {
                 updateAttempted = true
-
                 try {
-                    val result = engine.updateYoutubeDL(
-                        context.applicationContext,
-                        YoutubeDL.UpdateChannel.STABLE
-                    )
-
-                    Log.i(
-                        TAG,
-                        "yt-dlp update result: $result"
-                    )
-
+                    Log.i(TAG, "yt-dlp update: ${engine.updateYoutubeDL(context.applicationContext, YoutubeDL.UpdateChannel.STABLE)}")
                 } catch (e: Exception) {
-                    Log.w(
-                        TAG,
-                        "yt-dlp update failed; using installed version",
-                        e
-                    )
+                    // Do not confuse a failed update check with a successful update.
+                    Log.w(TAG, "yt-dlp update unavailable; using bundled version", e)
                 }
             }
         }
     }
 
-    // Analyze a single YouTube video.
-    suspend fun analyze(url: String): String =
-        withContext(Dispatchers.IO) {
-
-            require(isSupported(url)) {
-                "Please enter a valid HTTPS YouTube URL."
-            }
-
-            ensureEngineReady()
-
-            val request = YoutubeDLRequest(url)
-            request.addOption("--no-playlist")
-
-            val info = YoutubeDL.getInstance().getInfo(request)
-
-            info.title ?: "Untitled video"
-        }
-
-    // Select a video/audio format.
-    private fun selectFormat(choice: String): String {
-        return when (choice) {
-
-            "Best" -> {
-                "bv[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best"
-            }
-
-            "Audio M4A" -> {
-                "bestaudio[ext=m4a]/bestaudio"
-            }
-
-            "1080p", "720p", "480p", "360p" -> {
-                val height = choice.removeSuffix("p").toInt()
-
-                "bv[height<=$height][ext=mp4]" +
-                    "+ba[ext=m4a]" +
-                    "/b[height<=$height][ext=mp4]" +
-                    "/best[height<=$height]"
-            }
-
-            else -> {
-                "b[ext=mp4]/best"
-            }
-        }
+    suspend fun analyze(url: String): String = withContext(Dispatchers.IO) {
+        require(isSupported(url)) { "Enter a valid HTTPS YouTube URL" }
+        ensureEngineReady()
+        val request = YoutubeDLRequest(url)
+        request.addOption("--no-playlist")
+        YoutubeDL.getInstance().getInfo(request).title ?: "Untitled video"
     }
 
-    // Download a single video to the Android device.
-    suspend fun download(
-        url: String,
-        choice: String,
-        onProgress: (Float) -> Unit
-    ): String = withContext(Dispatchers.IO) {
-
-        require(isSupported(url)) {
-            "Invalid YouTube URL"
-        }
-
+    suspend fun analyzePlaylist(url: String): PlaylistDetails = withContext(Dispatchers.IO) {
+        require(isPlaylist(url)) { "Enter a YouTube playlist URL containing list=" }
         ensureEngineReady()
-
-        val baseDir = context.getExternalFilesDir(
-            Environment.DIRECTORY_DOWNLOADS
-        ) ?: error("App download storage unavailable")
-
-        val taskDir = File(
-            baseDir,
-            "tasks/${UUID.randomUUID()}"
-        )
-
-        check(taskDir.mkdirs()) {
-            "Cannot create temporary download folder"
+        val request = YoutubeDLRequest(url)
+        request.addOption("--yes-playlist")
+        request.addOption("--flat-playlist")
+        request.addOption("--playlist-end", "50")
+        request.addOption("--dump-single-json")
+        val result = YoutubeDL.getInstance().execute(request)
+        val json = JSONObject(result.out)
+        val entries = json.optJSONArray("entries") ?: error("Playlist entries unavailable")
+        val videos = buildList {
+            for (i in 0 until entries.length()) {
+                val entry = entries.optJSONObject(i) ?: continue
+                val id = entry.optString("id")
+                if (!id.matches(Regex("[A-Za-z0-9_-]{11}"))) continue
+                add(PlaylistVideo(id, entry.optString("title", "Video ${i + 1}"), "https://www.youtube.com/watch?v=$id"))
+            }
         }
+        require(videos.isNotEmpty()) { "No available videos in this playlist" }
+        PlaylistDetails(json.optString("title", "Playlist"), videos)
+    }
 
+    /** Slash fallback only chooses streams with audio in the last branch. */
+    private fun selectFormat(choice: String): String = when (choice) {
+        "Audio M4A" -> "bestaudio[ext=m4a]/bestaudio"
+        "Best" -> "bv[ext=mp4]+ba[ext=m4a]/bv+ba/best"
+        "1080p", "720p", "480p", "360p" -> {
+            val limit = choice.removeSuffix("p").toInt()
+            "bv[height<=$limit][ext=mp4]+ba[ext=m4a]/" +
+                "bv[height<=$limit]+ba/b[height<=$limit]"
+        }
+        else -> error("Unsupported quality: $choice")
+    }
+
+    suspend fun download(url: String, choice: String, onProgress: (Float) -> Unit): String = withContext(Dispatchers.IO) {
+        require(isSupported(url)) { "Invalid YouTube URL" }
+        ensureEngineReady()
+        val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            ?: error("App download storage unavailable")
+        val taskDir = File(baseDir, "tasks/${UUID.randomUUID()}")
+        check(taskDir.mkdirs()) { "Cannot create temporary directory" }
         try {
             val request = YoutubeDLRequest(url)
-
             request.addOption("--no-playlist")
             request.addOption("--no-overwrites")
             request.addOption("--restrict-filenames")
             request.addOption("--newline")
-
-            request.addOption(
-                "-o",
-                File(
-                    taskDir,
-                    "%(title).150B.%(ext)s"
-                ).absolutePath
-            )
-
-            val isAudio = choice == "Audio M4A"
-
-            request.addOption(
-                "-f",
-                selectFormat(choice)
-            )
-
-            if (!isAudio) {
-                request.addOption(
-                    "--merge-output-format",
-                    "mp4"
-                )
+            request.addOption("-o", File(taskDir, "%(title).120B.%(ext)s").absolutePath)
+            request.addOption("-f", selectFormat(choice))
+            val audioOnly = choice == "Audio M4A"
+            if (!audioOnly) request.addOption("--merge-output-format", "mp4")
+            // yt-dlp prints only the final, post-processing output at this stage.
+            request.addOption("--print", "after_move:filepath")
+            val result = YoutubeDL.getInstance().execute(request, UUID.randomUUID().toString()) { percent, _, _ ->
+                onProgress(percent.coerceIn(0f, 100f))
             }
-
-            val processId = UUID.randomUUID().toString()
-
-            Log.i(TAG, "Starting download process")
-
-            YoutubeDL.getInstance().execute(
-                request,
-                processId,
-                { progress, _, _ ->
-                    onProgress(
-                        progress.coerceIn(0f, 100f)
-                    )
-                }
-            )
-
-            // Locate the final media output.
-            val outputFile = taskDir.listFiles()
-                ?.filter { file ->
-                    file.isFile &&
-                    !file.name.endsWith(".part") &&
-                    !file.name.endsWith(".ytdl") &&
-                    !file.name.endsWith(".temp")
-                }
-                ?.maxByOrNull { it.length() }
-                ?: error(
-                    "Download completed but media file was not found"
-                )
-
-            // Determine the actual output MIME type.
-            val extension = outputFile.extension.lowercase()
-
-            val mimeType = when (extension) {
+            val finalFile = result.out.lineSequence().map { File(it.trim()) }
+                .firstOrNull { it.isFile && it.parentFile?.canonicalFile == taskDir.canonicalFile }
+                ?: error("Final merged output not identified. Check yt-dlp/FFmpeg logs; partial streams were not saved.")
+            val ext = finalFile.extension.lowercase()
+            val mime = when(ext) {
                 "mp4", "m4v" -> "video/mp4"
                 "m4a" -> "audio/mp4"
                 "mp3" -> "audio/mpeg"
-                "webm" -> if (isAudio) {
-                    "audio/webm"
-                } else {
-                    "video/webm"
-                }
+                "webm" -> if (audioOnly) "audio/webm" else "video/webm"
+                "mkv" -> "video/x-matroska"
                 else -> "application/octet-stream"
             }
-
-            
-val collection =
-    MediaStore.Downloads.EXTERNAL_CONTENT_URI
-
-
-            // Save the completed file to Downloads/ClipPort.
+            // Downloads collection, not Video collection: Android forbids Download/ in Video.
             val values = ContentValues().apply {
-                put(
-                    MediaStore.MediaColumns.DISPLAY_NAME,
-                    outputFile.name
-                )
-
-                put(
-                    MediaStore.MediaColumns.MIME_TYPE,
-                    mimeType
-                )
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(
-                        MediaStore.MediaColumns.RELATIVE_PATH,
-                        Environment.DIRECTORY_DOWNLOADS +
-                            "/ClipPort"
-                    )
-
-                    put(
-                        MediaStore.MediaColumns.IS_PENDING,
-                        1
-                    )
-                }
+                put(MediaStore.MediaColumns.DISPLAY_NAME, finalFile.name)
+                put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/ClipPort")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
-
             val resolver = context.contentResolver
-
-            val outputUri = resolver.insert(
-                collection,
-                values
-            ) ?: error("Failed to create output media file")
-
+            val output = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("Unable to create destination file")
             try {
-                val stream = resolver.openOutputStream(outputUri)
-                    ?: error("Failed to open output stream")
-
-                stream.use { output ->
-                    outputFile.inputStream().use { input ->
-                        input.copyTo(output)
-                    }
-                }
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val completedValues = ContentValues().apply {
-                        put(
-                            MediaStore.MediaColumns.IS_PENDING,
-                            0
-                        )
-                    }
-
-                    resolver.update(
-                        outputUri,
-                        completedValues,
-                        null,
-                        null
-                    )
-                }
-
+                resolver.openOutputStream(output)?.use { target ->
+                    finalFile.inputStream().use { it.copyTo(target) }
+                } ?: error("Unable to write destination file")
+                resolver.update(output, ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }, null, null)
             } catch (e: Exception) {
-                resolver.delete(
-                    outputUri,
-                    null,
-                    null
-                )
-
+                resolver.delete(output, null, null)
                 throw e
             }
-
             onProgress(100f)
-
-            Log.i(
-                TAG,
-                "Download saved: ${outputFile.name}"
-            )
-
-            "Saved to Downloads/ClipPort/${outputFile.name}"
-
+            "Saved to Downloads/ClipPort/${finalFile.name}"
         } finally {
-            // Remove temporary files regardless of result.
             taskDir.deleteRecursively()
         }
     }

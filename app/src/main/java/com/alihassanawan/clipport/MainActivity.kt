@@ -10,19 +10,18 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 private val Navy = Color(0xFF0C1225)
 private val Panel = Color(0xFF19233A)
 private val Accent = Color(0xFF8B87FC)
-private val Txt = Color(0xFFF3F4FC)
 private val Muted = Color(0xFFB3BDCC)
 private val qualityOptions = listOf("Best", "1080p", "720p", "480p", "360p", "Audio M4A")
 
@@ -37,71 +36,140 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun ClipPortScreen(initialUrl: String) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val manager = remember { Downloader(context) }
+    val downloader = remember { Downloader(context.applicationContext) }
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf(initialUrl) }
-    var title by remember { mutableStateOf("") }
+    var videoTitle by remember { mutableStateOf("") }
+    var playlist by remember { mutableStateOf<PlaylistDetails?>(null) }
+    val selected = remember { mutableStateListOf<String>() }
     var quality by remember { mutableStateOf("Best") }
-    var expanded by remember { mutableStateOf(false) }
+    var dropdown by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
-    var progress by remember { mutableFloatStateOf(0f) }
-    var status by remember { mutableStateOf("Paste a video link to begin") }
-    val colors = darkColorScheme(primary = Accent, background = Navy, surface = Panel, onBackground = Txt, onSurface = Txt)
-    MaterialTheme(colorScheme = colors) {
+    var currentProgress by remember { mutableFloatStateOf(0f) }
+    var status by remember { mutableStateOf("Paste a YouTube video or playlist link") }
+    var completed by remember { mutableIntStateOf(0) }
+
+    MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = Navy, surface = Panel)) {
         Surface(modifier = Modifier.fillMaxSize(), color = Navy) {
-            Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                Spacer(Modifier.height(8.dp))
-                Text("◉ ClipPort", fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, color = Txt)
-                Text("Your videos. Your device.", fontSize = 15.sp, color = Muted)
-                Spacer(Modifier.height(10.dp))
-                Text("Save videos easily", fontSize = 32.sp, lineHeight = 38.sp, fontWeight = FontWeight.Bold, color = Txt)
-                Text("Paste a link, choose quality and download directly to your phone — no account or hosting needed.", color = Muted, lineHeight = 22.sp)
-                Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp)) {
-                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text("Video link", fontWeight = FontWeight.SemiBold)
-                        OutlinedTextField(value = url, onValueChange = { url = it; title = "" }, modifier = Modifier.fillMaxWidth(), label = { Text("https://youtube.com/watch?v=...") }, singleLine = true)
-                        Button(onClick = {
-                            if (!Downloader.isSupported(url)) { status = "Enter a valid HTTPS YouTube URL"; return@Button }
-                            busy = true; status = "Analyzing video..."; title = ""
-                            scope.launch {
-                                try { title = manager.analyze(url); status = "Video ready" }
-                                catch (e: Exception) { status = "Analysis failed: ${e.message ?: "Unknown error"}" }
-                                finally { busy = false }
-                            }
-                        }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) { Text("Analyze video") }
-                    }
-                }
-                if (title.isNotBlank()) {
-                    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(22.dp)) {
-                        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                            Text("Download format", color = Muted)
-                            Box {
-                                OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) { Text(quality + "  ▾") }
-                                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                                    qualityOptions.forEach { option -> DropdownMenuItem(text = { Text(option) }, onClick = { quality = option; expanded = false }) }
-                                }
-                            }
-                            Button(onClick = {
-                                busy = true; progress = 0f; status = "Starting download..."
+            Column(
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(15.dp)
+            ) {
+                Spacer(Modifier.height(6.dp))
+                Text("◉ ClipPort", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+                Text("Video and playlist downloads · Phase 2a", color = Muted)
+                Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedTextField(
+                            value = url,
+                            onValueChange = { url = it; videoTitle = ""; playlist = null; selected.clear() },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("YouTube link") },
+                            singleLine = true
+                        )
+                        Button(
+                            enabled = !busy,
+                            onClick = {
+                                busy = true
+                                videoTitle = ""; playlist = null; selected.clear()
+                                status = "Analyzing link..."
                                 scope.launch {
                                     try {
-                                        status = manager.download(url, quality) { value -> progress = value }
-                                    } catch (e: Exception) { status = "Download failed: ${e.message ?: "Unknown error"}" }
-                                    finally { busy = false }
+                                        if (Downloader.isPlaylist(url)) {
+                                            playlist = downloader.analyzePlaylist(url)
+                                            selected.addAll(playlist!!.videos.map { it.id })
+                                            status = "${playlist!!.videos.size} entries loaded (first 50 maximum)"
+                                        } else {
+                                            videoTitle = downloader.analyze(url)
+                                            status = "Video ready"
+                                        }
+                                    } catch (e: Exception) {
+                                        status = "Analysis failed: ${e.message ?: "Unknown error"}"
+                                    } finally { busy = false }
                                 }
-                            }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(14.dp)) { Text("Download to phone", fontWeight = FontWeight.Bold) }
+                            },
+                            modifier = Modifier.fillMaxWidth().height(50.dp)
+                        ) { Text("Analyze video / playlist") }
+                    }
+                }
+
+                if (videoTitle.isNotBlank() || playlist != null) {
+                    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(playlist?.title ?: videoTitle, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                            Text("Quality (actual availability depends on video)", color = Muted, fontSize = 12.sp)
+                            Box {
+                                OutlinedButton(onClick = { dropdown = true }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("$quality ▾")
+                                }
+                                DropdownMenu(expanded = dropdown, onDismissRequest = { dropdown = false }) {
+                                    qualityOptions.forEach { option ->
+                                        DropdownMenuItem(text = { Text(option) }, onClick = { quality = option; dropdown = false })
+                                    }
+                                }
+                            }
+                            playlist?.let { details ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton(enabled = !busy, onClick = {
+                                        selected.clear(); selected.addAll(details.videos.map { it.id })
+                                    }) { Text("Select all") }
+                                    TextButton(enabled = !busy, onClick = { selected.clear() }) { Text("Deselect all") }
+                                }
+                                Text("Selected ${selected.size} / ${details.videos.size}", color = Muted)
+                                details.videos.forEach { video ->
+                                    Row(modifier = Modifier.fillMaxWidth()) {
+                                        Checkbox(
+                                            checked = video.id in selected,
+                                            enabled = !busy,
+                                            onCheckedChange = { checked ->
+                                                if (checked && video.id !in selected) selected.add(video.id)
+                                                if (!checked) selected.remove(video.id)
+                                            }
+                                        )
+                                        Text(video.title, modifier = Modifier.weight(1f).padding(top = 10.dp), fontSize = 13.sp)
+                                    }
+                                }
+                            }
+                            Button(
+                                enabled = !busy && (playlist == null || selected.isNotEmpty()),
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
+                                onClick = {
+                                    busy = true; currentProgress = 0f; completed = 0
+                                    val jobs = playlist?.videos?.filter { it.id in selected }?.map { it.url } ?: listOf(url)
+                                    scope.launch {
+                                        try {
+                                            jobs.forEachIndexed { index, videoUrl ->
+                                                status = "Downloading ${index + 1}/${jobs.size}..."
+                                                val message = downloader.download(videoUrl, quality) { amount ->
+                                                    scope.launch(Dispatchers.Main) { currentProgress = amount }
+                                                }
+                                                completed++
+                                                status = message
+                                            }
+                                            status = "Complete: $completed of ${jobs.size} saved in Downloads/ClipPort"
+                                        } catch (e: Exception) {
+                                            status = "Stopped after $completed completed: ${e.message ?: "Unknown error"}"
+                                        } finally { busy = false }
+                                    }
+                                }
+                            ) { Text(if (playlist != null) "Download selected (${selected.size})" else "Download to phone") }
                         }
                     }
                 }
-                if (busy) { LinearProgressIndicator(progress = { (progress / 100f).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth()); Text("${progress.toInt()}%", color = Muted) }
-                Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) {
-                    Text(status, modifier = Modifier.fillMaxWidth().padding(16.dp), color = Txt)
+                if (busy) {
+                    LinearProgressIndicator(
+                        progress = { (currentProgress / 100f).coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text("Current video: ${currentProgress.toInt()}%", color = Muted)
                 }
-                Text("PHASE 1 · Single-video downloads", fontSize = 11.sp, color = Muted)
-                Text("Use only for media you own or are authorized to download.", fontSize = 12.sp, color = Muted)
-                Spacer(Modifier.height(15.dp))
-                Text("Built by Ali Hassan Awan", textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(), color = Muted, fontSize = 13.sp)
+                Card(colors = CardDefaults.cardColors(containerColor = Panel)) {
+                    Text(status, modifier = Modifier.fillMaxWidth().padding(16.dp))
+                }
+                Text("Phase 2a: playlist queue runs while app is open. Background service and cancellation are planned for Phase 2b.", color = Muted, fontSize = 12.sp)
+                Text("Use only for content you own or have permission to download.", color = Muted, fontSize = 12.sp)
+                Spacer(Modifier.height(10.dp))
+                Text("Built by Ali Hassan Awan", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = Muted, fontSize = 13.sp)
             }
         }
     }
