@@ -173,7 +173,9 @@ class Downloader(private val context: Context) {
                 writeDiagnostics(taskDir, "Download engine exception: ${e.stackTraceToString()}")
                 throw e
             }
-            writeDiagnostics(taskDir, "yt-dlp response\nstdout:\n${response.out}\nstderr:\n${response.err}")
+            if (response.err.contains("ERROR:", ignoreCase = true)) {
+                writeDiagnostics(taskDir, "yt-dlp warning/error: ${response.err.takeLast(6000)}")
+            }
             // Use the actual finished files. Do not rely solely on yt-dlp stdout:
             // its wrapper may suppress or alter --print after_move output.
             val finalFile = locateCompletedMedia(taskDir, audioOnly)

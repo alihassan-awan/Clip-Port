@@ -75,6 +75,7 @@ private fun PremiumScreen(initialUrl: String) {
     val scope = rememberCoroutineScope()
     val jobs by DownloadQueue.items.collectAsState()
     val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    var currentTab by remember { mutableStateOf("Discover") }
     var url by remember { mutableStateOf(initialUrl) }
     var title by remember { mutableStateOf("") }
     var playlist by remember { mutableStateOf<PlaylistDetails?>(null) }
@@ -122,6 +123,30 @@ private fun PremiumScreen(initialUrl: String) {
                     }
                 }
                 item {
+                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(20.dp)).padding(5.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("Discover", "Downloads").forEach { tab ->
+                            val active = currentTab == tab
+                            Surface(
+                                modifier = Modifier.weight(1f).clickable { currentTab = tab },
+                                shape = RoundedCornerShape(16.dp),
+                                color = if (active) Violet else Color.Transparent
+                            ) {
+                                Row(Modifier.padding(vertical = 13.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(if (tab == "Discover") Icons.Default.Explore else Icons.Default.Downloading,
+                                        contentDescription = null, modifier = Modifier.size(18.dp),
+                                        tint = if (active) Night else Subtle)
+                                    Spacer(Modifier.width(7.dp))
+                                    Text(tab, fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                                        color = if (active) Night else Subtle)
+                                    if (tab == "Downloads" && jobs.any { it.state in setOf("Queued", "Downloading") }) {
+                                        Spacer(Modifier.width(5.dp)); Text("•", color = if (active) Night else Cyan)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (currentTab == "Discover") item {
                     Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF1D2851), Panel)), RoundedCornerShape(26.dp)).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Your media, one tap away.", fontSize = 26.sp, fontWeight = FontWeight.Bold, lineHeight = 31.sp)
                         Text("Choose your quality. Save to your phone. Keep downloads running in the background.", color = Subtle, fontSize = 13.sp)
@@ -145,7 +170,7 @@ private fun PremiumScreen(initialUrl: String) {
                         }
                     }
                 }
-                if (playlist != null || title.isNotBlank()) item {
+                if (currentTab == "Discover" && (playlist != null || title.isNotBlank())) item {
                     Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(24.dp)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
                         Text("MEDIA PREVIEW", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
                         if (playlist == null) {
@@ -187,20 +212,23 @@ private fun PremiumScreen(initialUrl: String) {
                         Button(onClick = {
                             val toAdd = playlist?.videos?.filter { it.id in selected }?.map { DownloadItem(url=it.url, quality=quality, title=it.title) }
                                 ?: listOf(DownloadItem(url=url, quality=quality, title=title))
-                            DownloadQueue.enqueue(toAdd); startQueue(); status = "${toAdd.size} item(s) added to queue"
+                            DownloadQueue.enqueue(toAdd)
+                            startQueue()
+                            status = "${toAdd.size} item(s) added to queue"
+                            currentTab = "Downloads"
                         }, enabled = playlist == null || selected.isNotEmpty(), modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp)) {
                             Icon(Icons.Default.Download, contentDescription = null); Spacer(Modifier.width(8.dp))
                             Text(if (playlist == null) "Download to phone" else "Download selected (${selected.size})")
                         }
                     }
                 }
-                item {
+                if (currentTab == "Discover") item {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Default.Info, contentDescription = null, tint = Cyan)
                         Text(status, color = Subtle, fontSize = 12.sp, modifier = Modifier.weight(1f))
                     }
                 }
-                if (update != null || updateMessage.isNotBlank()) item {
+                if (currentTab == "Discover" && (update != null || updateMessage.isNotBlank())) item {
                     Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                         Text(updateMessage, fontSize = 13.sp)
                         update?.let { release -> Button(onClick = { UpdateChecker.openRelease(context, release) }) {
@@ -208,10 +236,32 @@ private fun PremiumScreen(initialUrl: String) {
                         } }
                     }
                 }
-                if (jobs.isNotEmpty()) {
+                if (currentTab == "Downloads") {
+                    item {
+                        Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF222D52), Panel)), RoundedCornerShape(24.dp)).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text("Your downloads", fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                            Text("Track downloads, review results and retry when needed.", color = Subtle, fontSize = 12.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                SummaryTile("Active", jobs.count { it.state == "Downloading" || it.state == "Queued" }, Modifier.weight(1f))
+                                SummaryTile("Saved", jobs.count { it.state == "Completed" }, Modifier.weight(1f))
+                                SummaryTile("Failed", jobs.count { it.state == "Failed" }, Modifier.weight(1f))
+                            }
+                        }
+                    }
+                    if (jobs.isEmpty()) item {
+                        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(24.dp)).padding(28.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Icon(Icons.Default.CloudDownload, contentDescription = null, tint = Cyan, modifier = Modifier.size(48.dp))
+                            Text("Nothing here yet", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                            Text("Analyze a video or playlist to start downloading.", color = Subtle, fontSize = 12.sp)
+                            OutlinedButton(onClick = { currentTab = "Discover" }) { Text("Find videos") }
+                        }
+                    }
+                }
+                if (currentTab == "Downloads" && jobs.isNotEmpty()) {
                     item {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Download activity", fontWeight = FontWeight.Bold, fontSize = 21.sp, modifier = Modifier.weight(1f))
+                            Text("Activity", fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.weight(1f))
                             if (jobs.any { it.state == "Queued" }) TextButton(onClick = { startQueue() }) { Text("Resume") }
                             if (jobs.any { it.state in setOf("Completed", "Failed", "Cancelled") }) TextButton(onClick = { DownloadQueue.clearFinished() }) { Text("Clear") }
                         }
@@ -240,11 +290,20 @@ private fun PremiumScreen(initialUrl: String) {
                     }
                 }
                 item {
-                    Text("ClipPort 0.3 beta • Saved to Downloads/ClipPort", color=Subtle,fontSize=11.sp)
+                    Text("ClipPort 0.3.1 beta • Saved to Downloads/ClipPort", color=Subtle,fontSize=11.sp)
                     Text("Download only media you own or have permission to save.", color=Subtle,fontSize=11.sp)
                     Spacer(Modifier.height(16.dp))
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SummaryTile(label: String, count: Int, modifier: Modifier = Modifier) {
+    Column(modifier.background(Soft, RoundedCornerShape(17.dp)).padding(vertical = 13.dp, horizontal = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(count.toString(), fontSize = 21.sp, fontWeight = FontWeight.Bold, color = Pale)
+        Text(label, color = Subtle, fontSize = 11.sp)
     }
 }

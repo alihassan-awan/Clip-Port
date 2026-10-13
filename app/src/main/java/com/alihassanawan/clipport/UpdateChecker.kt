@@ -43,7 +43,14 @@ object UpdateChecker {
             val current = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.0.0"
             if (tag.isBlank() || !isNewer(tag, current)) null
             else ClipPortRelease(tag, obj.optString("name", "ClipPort update"),
-                obj.optString("html_url").takeIf { it.startsWith(RELEASES) } ?: RELEASES)
+                obj.optString("html_url").takeIf { value ->
+                    try {
+                        val u = Uri.parse(value)
+                        u.scheme == "https" && u.host == "github.com" &&
+                            u.encodedAuthority == "github.com" &&
+                            (u.path ?: "").startsWith("/alihassan-awan/Clip-Port/releases/")
+                    } catch (_: Exception) { false }
+                } ?: RELEASES)
         } finally { connection.disconnect() }
     }
 
