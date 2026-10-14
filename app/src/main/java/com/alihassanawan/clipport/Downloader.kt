@@ -18,6 +18,7 @@ import java.util.UUID
 
 /** Phase 2a: playlist selection, reliable output selection and merged-audio preference. */
 data class PlaylistVideo(val id: String, val title: String, val url: String)
+data class MediaPreview(val title: String, val thumbnail: String?, val source: String)
 data class PlaylistDetails(val title: String, val videos: List<PlaylistVideo>)
 
 class Downloader(private val context: Context) {
@@ -26,16 +27,29 @@ class Downloader(private val context: Context) {
         private val engineLock = Any()
         @Volatile private var updateAttempted = false
 
+        // Explicit allowlist: do not accept arbitrary sites or misleading subdomains.
         fun isSupported(raw: String): Boolean = try {
             val uri = URI(raw.trim())
-            val host = (uri.host ?: "").lowercase()
-            uri.scheme.equals("https", true) &&
-                (host == "youtube.com" || host.endsWith(".youtube.com") || host == "youtu.be")
+            val host = uri.host.orEmpty().lowercase().trimEnd('.')
+            uri.scheme.equals("https", true) && uri.userInfo == null &&
+                uri.port == -1 && host in setOf(
+                    "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be",
+                    "facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com", "fb.watch",
+                    "tiktok.com", "www.tiktok.com", "m.tiktok.com", "vm.tiktok.com", "vt.tiktok.com"
+                )
         } catch (_: Exception) { false }
+
+        fun source(raw: String): String = try {
+            when (URI(raw.trim()).host.orEmpty().lowercase()) {
+                "youtu.be", "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com" -> "YouTube"
+                "facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com", "fb.watch" -> "Facebook"
+                else -> "TikTok"
+            }
+        } catch (_: Exception) { "Video" }
 
         fun isPlaylist(url: String): Boolean = try {
             val uri = URI(url.trim())
-            isSupported(url) && uri.rawQuery.orEmpty().split('&').any {
+            source(url) == "YouTube" && isSupported(url) && uri.rawQuery.orEmpty().split('&').any {
                 it.substringBefore('=') == "list" && it.substringAfter('=', "").isNotBlank()
             }
         } catch (_: Exception) { false }
@@ -74,6 +88,24 @@ class Downloader(private val context: Context) {
         val request = YoutubeDLRequest(url)
         request.addOption("--no-playlist")
         YoutubeDL.getInstance().getInfo(request).title ?: "Untitled video"
+    }
+
+    suspend fun analyzeMedia(url: String): MediaPreview = withContext(Dispatchers.IO) {
+        require(isSupported(url)) { "Enter a public HTTPS YouTube, Facebook or TikTok link" }
+        ensureEngineReady()
+        val request = YoutubeDLRequest(url)
+        request.addOption("--no-playlist")
+        request.addOption("--skip-download")
+        request.addOption("--dump-single-json")
+        val output = YoutubeDL.getInstance().execute(request).out
+        val jsonStart = output.indexOf('{')
+        check(jsonStart >= 0) { "Could not read video metadata" }
+        val data = JSONObject(output.substring(jsonStart))
+        MediaPreview(
+            data.optString("title").takeIf { it.isNotBlank() } ?: "Untitled video",
+            data.optString("thumbnail").takeIf { it.startsWith("https://") },
+            source(url)
+        )
     }
 
     suspend fun analyzePlaylist(url: String): PlaylistDetails = withContext(Dispatchers.IO) {
@@ -159,9 +191,23 @@ class Downloader(private val context: Context) {
             request.addOption("--restrict-filenames")
             request.addOption("--newline")
             request.addOption("-o", File(taskDir, "%(title).120B.%(ext)s").absolutePath)
-            request.addOption("-f", selectFormat(choice))
+            val source = source(url)
+            val format = if (source == "YouTube") selectFormat(choice) else when (choice) {
+                "Audio M4A" -> "bestaudio[ext=m4a]/bestaudio/best"
+                "Best" -> "best[ext=mp4]/bestvideo+bestaudio/best"
+                else -> {
+                    val limit = choice.removeSuffix("p").toIntOrNull() ?: 720
+                    "best[height<=$limit][ext=mp4]/best[height<=$limit]/" +
+                        "bestvideo[height<=$limit]+bestaudio/best[ext=mp4]/best"
+                }
+            }
+            request.addOption("-f", format)
             val audioOnly = choice == "Audio M4A"
             if (!audioOnly) request.addOption("--merge-output-format", "mp4")
+            else if (source != "YouTube") {
+                request.addOption("--extract-audio")
+                request.addOption("--audio-format", "m4a")
+            }
             // Let yt-dlp finish post-processing before inspecting output files.
             // Some Android wrappers do not preserve --print output in result.out.
             val response = try {

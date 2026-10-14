@@ -13,6 +13,7 @@ data class DownloadItem(
     val url: String,
     val quality: String,
     val title: String,
+    val thumbnail: String? = null,
     val state: String = "Queued",
     val progress: Float = 0f,
     val message: String = ""
@@ -49,6 +50,7 @@ object DownloadQueue {
                     url = url,
                     quality = value.optString("quality", "Best"),
                     title = value.optString("title", "Video"),
+                    thumbnail = value.optString("thumbnail").takeIf { it.startsWith("https://") },
                     state = state,
                     progress = if (state == "Interrupted") 0f else value.optDouble("progress", 0.0).toFloat().coerceIn(0f,100f),
                     message = if (state == "Interrupted") "App stopped during download. Tap Retry to download again." else value.optString("message", "")
@@ -115,6 +117,7 @@ object DownloadQueue {
                 put("url", item.url)
                 put("quality", item.quality)
                 put("title", item.title)
+                put("thumbnail", item.thumbnail ?: "")
                 put("state", item.state)
                 put("progress", item.progress)
                 put("message", item.message)

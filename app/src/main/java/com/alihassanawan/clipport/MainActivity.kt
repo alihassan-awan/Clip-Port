@@ -32,11 +32,11 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import java.net.URI
 
-private val Night = Color(0xFF090E1C)
-private val Panel = Color(0xFF16213A)
-private val Soft = Color(0xFF202C49)
-private val Violet = Color(0xFF9587FF)
-private val Cyan = Color(0xFF57D6FF)
+private val Night = Color(0xFF080C17)
+private val Panel = Color(0xFF141C2F)
+private val Soft = Color(0xFF202943)
+private val Violet = Color(0xFFB3A2FF)
+private val Cyan = Color(0xFF75E0DC)
 private val Pale = Color(0xFFF4F5FF)
 private val Subtle = Color(0xFFA9B6CD)
 private val choices = listOf("Best", "1080p", "720p", "480p", "360p", "Audio M4A")
@@ -58,10 +58,10 @@ private fun ytId(raw: String): String? = try {
 } catch (_: Exception) { null }
 
 @Composable
-private fun PreviewImage(videoId: String?, modifier: Modifier = Modifier) {
+private fun PreviewImage(videoId: String?, modifier: Modifier = Modifier, imageUrl: String? = null) {
     Box(modifier = modifier.background(Soft, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
-        if (videoId != null) AsyncImage(
-            model = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
+        if (imageUrl != null || videoId != null) AsyncImage(
+            model = imageUrl ?: "https://i.ytimg.com/vi/$videoId/hqdefault.jpg",
             contentDescription = "Video thumbnail",
             modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop
         ) else Icon(Icons.Default.PlayCircle, contentDescription = null, tint = Cyan)
@@ -78,6 +78,8 @@ private fun PremiumScreen(initialUrl: String) {
     var currentTab by remember { mutableStateOf("Discover") }
     var url by remember { mutableStateOf(initialUrl) }
     var title by remember { mutableStateOf("") }
+    var mediaThumbnail by remember { mutableStateOf<String?>(null) }
+    var mediaSource by remember { mutableStateOf("YouTube") }
     var playlist by remember { mutableStateOf<PlaylistDetails?>(null) }
     val selected = remember { mutableStateListOf<String>() }
     var quality by remember { mutableStateOf("Best") }
@@ -148,20 +150,34 @@ private fun PremiumScreen(initialUrl: String) {
                 }
                 if (currentTab == "Discover") item {
                     Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF1D2851), Panel)), RoundedCornerShape(26.dp)).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Your media, one tap away.", fontSize = 26.sp, fontWeight = FontWeight.Bold, lineHeight = 31.sp)
-                        Text("Choose your quality. Save to your phone. Keep downloads running in the background.", color = Subtle, fontSize = 13.sp)
-                        OutlinedTextField(value = url, onValueChange = { url = it; title = ""; playlist = null; selected.clear() },
-                            modifier = Modifier.fillMaxWidth(), placeholder = { Text("Paste a YouTube link") },
+                        Text("All your videos. One place.", fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, lineHeight = 33.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            listOf("YouTube", "Facebook", "TikTok").forEach { platform ->
+                                Surface(color = Soft, shape = RoundedCornerShape(50.dp)) {
+                                    Text(platform, modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp), color = if (platform == "YouTube") Violet else Cyan, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                        Text("Discover, select and save videos directly to your phone. No account or remote server required.", color = Subtle, fontSize = 13.sp)
+                        OutlinedTextField(value = url, onValueChange = { url = it; title = ""; mediaThumbnail = null; playlist = null; selected.clear() },
+                            modifier = Modifier.fillMaxWidth(), placeholder = { Text("Paste YouTube, Facebook or TikTok URL") },
                             singleLine = true, shape = RoundedCornerShape(15.dp),
                             leadingIcon = { Icon(Icons.Default.Link, contentDescription = null) })
                         Button(onClick = {
                             busy = true; title = ""; playlist = null; selected.clear(); status = "Analyzing media..."
                             scope.launch {
                                 try {
+                                    if (!Downloader.isSupported(url)) error("Use a public HTTPS YouTube, Facebook or TikTok link")
                                     if (Downloader.isPlaylist(url)) {
                                         val p = downloader.analyzePlaylist(url)
                                         playlist = p; selected.addAll(p.videos.map { it.id }); status = "${p.videos.size} videos found"
-                                    } else { title = downloader.analyze(url); status = "Ready to download" }
+                                    } else {
+                                        val result = downloader.analyzeMedia(url)
+                                        title = result.title
+                                        mediaThumbnail = result.thumbnail
+                                        mediaSource = result.source
+                                        status = "$mediaSource video ready"
+                                    }
                                 } catch (e: Exception) { status = "Analysis failed: ${e.message ?: "Unknown error"}" }
                                 finally { busy = false }
                             }
@@ -174,14 +190,15 @@ private fun PremiumScreen(initialUrl: String) {
                     Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(24.dp)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
                         Text("MEDIA PREVIEW", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
                         if (playlist == null) {
-                            PreviewImage(ytId(url), Modifier.fillMaxWidth().height(190.dp))
+                            PreviewImage(ytId(url), Modifier.fillMaxWidth().height(190.dp), mediaThumbnail)
+                            Text(mediaSource.uppercase(), fontSize = 10.sp, color = Cyan, fontWeight = FontWeight.Bold)
                             Text(title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                         } else {
                             Text(playlist!!.title, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                            Text("${playlist!!.videos.size} videos in this playlist", color = Subtle)
+                            Text("${playlist!!.videos.size} videos · YouTube playlist", color = Subtle)
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Save quality", color = Subtle, modifier = Modifier.weight(1f))
+                            Text("Download quality", color = Subtle, modifier = Modifier.weight(1f))
                             Box {
                                 OutlinedButton(onClick = { qualityMenu = true }) { Text(quality); Icon(Icons.Default.ArrowDropDown, contentDescription = null) }
                                 DropdownMenu(expanded = qualityMenu, onDismissRequest = { qualityMenu = false }) {
@@ -210,8 +227,8 @@ private fun PremiumScreen(initialUrl: String) {
                             }
                         }
                         Button(onClick = {
-                            val toAdd = playlist?.videos?.filter { it.id in selected }?.map { DownloadItem(url=it.url, quality=quality, title=it.title) }
-                                ?: listOf(DownloadItem(url=url, quality=quality, title=title))
+                            val toAdd = playlist?.videos?.filter { it.id in selected }?.map { DownloadItem(url=it.url, quality=quality, title=it.title, thumbnail="https://i.ytimg.com/vi/${it.id}/hqdefault.jpg") }
+                                ?: listOf(DownloadItem(url=url, quality=quality, title=title, thumbnail=mediaThumbnail))
                             DownloadQueue.enqueue(toAdd)
                             startQueue()
                             status = "${toAdd.size} item(s) added to queue"
@@ -269,11 +286,11 @@ private fun PremiumScreen(initialUrl: String) {
                     items(jobs.takeLast(60).reversed(), key = { it.id }) { job ->
                         Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(13.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                PreviewImage(ytId(job.url), Modifier.size(width=89.dp,height=55.dp))
+                                PreviewImage(ytId(job.url), Modifier.size(width=89.dp,height=55.dp), job.thumbnail)
                                 Spacer(Modifier.width(10.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(job.title, maxLines=2, overflow=TextOverflow.Ellipsis, fontSize=13.sp, fontWeight=FontWeight.Medium)
-                                    Text("${job.state} • ${job.quality} • ${job.progress.toInt()}%", color = if (job.state == "Completed") Cyan else Subtle, fontSize=11.sp)
+                                    Text("${Downloader.source(job.url)}  ·  ${job.state}  ·  ${job.quality}  ·  ${job.progress.toInt()}%", color = if (job.state == "Completed") Cyan else Subtle, fontSize=11.sp)
                                 }
                             }
                             if (job.state == "Downloading") LinearProgressIndicator(progress = { (job.progress/100f).coerceIn(0f,1f) }, modifier=Modifier.fillMaxWidth())
@@ -290,7 +307,7 @@ private fun PremiumScreen(initialUrl: String) {
                     }
                 }
                 item {
-                    Text("ClipPort 0.3.1 beta • Saved to Downloads/ClipPort", color=Subtle,fontSize=11.sp)
+                    Text("ClipPort 0.4 beta • Saved to Downloads/ClipPort", color=Subtle,fontSize=11.sp)
                     Text("Download only media you own or have permission to save.", color=Subtle,fontSize=11.sp)
                     Spacer(Modifier.height(16.dp))
                 }
