@@ -126,7 +126,7 @@ class MainActivity : ComponentActivity() {
         if (intent.action == Intent.ACTION_SEND) {
             val cleaned = SharedLinkParser.extract(intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty())
             invalidShare = cleaned == null
-            if (cleaned != null) latestSharedLink = cleaned
+            latestSharedLink = cleaned.orEmpty()
             shareRevision += 1
         }
     }
@@ -199,7 +199,7 @@ private fun PremiumScreen(initialUrl: String, invalidSharedLink: Boolean, shareR
         }
     }
     // Analyze once per share event. Do not key this effect to state mutated inside it:
-    // changing pendingShared/url while suspended previously cancelled yt-dlp mid-analysis.
+    // Mutating effect keys while suspended previously cancelled yt-dlp mid-analysis.
     LaunchedEffect(shareRevision) {
         if (initialUrl.isNotBlank()) {
             url = initialUrl
