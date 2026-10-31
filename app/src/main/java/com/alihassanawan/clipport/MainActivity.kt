@@ -252,20 +252,20 @@ private fun PremiumScreen(initialUrl: String, invalidSharedLink: Boolean, shareR
                     }
                 }
                 item {
-                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(20.dp)).padding(5.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("Discover", "Downloads").forEach { tab ->
+                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(20.dp)).padding(5.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        listOf("Discover", "Downloads", "Statuses").forEach { tab ->
                             val active = currentTab == tab
                             Surface(
                                 modifier = Modifier.weight(1f).clickable { currentTab = tab },
                                 shape = RoundedCornerShape(16.dp),
                                 color = if (active) Violet else Color.Transparent
                             ) {
-                                Row(Modifier.padding(vertical = 13.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(if (tab == "Discover") Icons.Default.Explore else Icons.Default.Downloading,
-                                        contentDescription = null, modifier = Modifier.size(18.dp),
+                                Row(Modifier.padding(vertical = 12.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(when (tab) { "Discover" -> Icons.Default.Explore; "Downloads" -> Icons.Default.Downloading; else -> Icons.Default.FolderOpen },
+                                        contentDescription = null, modifier = Modifier.size(16.dp),
                                         tint = if (active) Night else Subtle)
-                                    Spacer(Modifier.width(7.dp))
-                                    Text(tab, fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(tab, fontWeight = FontWeight.SemiBold, fontSize = 11.sp,
                                         color = if (active) Night else Subtle)
                                     if (tab == "Downloads" && jobs.any { it.state in setOf("Queued", "Downloading") }) {
                                         Spacer(Modifier.width(5.dp)); Text("•", color = if (active) Night else Cyan)
@@ -438,7 +438,7 @@ private fun PremiumScreen(initialUrl: String, invalidSharedLink: Boolean, shareR
                     }
                 }
                 item {
-                    Text("ClipPort v1.1.2 • Saved to Downloads/ClipPort", color=Subtle,fontSize=11.sp)
+                    Text("ClipPort v1.1.3 • Saved to Downloads/ClipPort", color=Subtle,fontSize=11.sp)
                     Text("Download only media you own or have permission to save.", color=Subtle,fontSize=11.sp)
                     Spacer(Modifier.height(16.dp))
                 }
