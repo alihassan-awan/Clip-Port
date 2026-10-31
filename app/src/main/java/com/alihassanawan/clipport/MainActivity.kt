@@ -47,15 +47,66 @@ private val Pale = Color(0xFFF4F5FF)
 private val Subtle = Color(0xFFA9B6CD)
 private val choices = listOf("720p", "Best", "1080p", "480p", "360p", "Audio M4A")
 
-/** Extract only an allowlisted HTTPS media URL from shared descriptions. */
+/** Resolve the VIDEO link from multi-URL share captions; never choose TikTok Lite ads. */
 internal object SharedLinkParser {
-    private val pattern = Regex("https://[^\\s<>\"']+", RegexOption.IGNORE_CASE)
-    fun extract(text: String): String? = pattern.findAll(text).map { it.value.trimEnd('.', ',', '!', ')', ']', '}', ';', ':') }
-        .firstOrNull { Downloader.isSupported(it) }
+    private val urls = Regex("""https?://[^\s<>"']+""", RegexOption.IGNORE_CASE)
+
+    private fun clean(raw: String): String = raw.trim().trimEnd('.', ',', '!', ')', ']', '}', ';', ':', '…', '،')
+
+    private fun isMediaLink(candidate: String): Boolean {
+        if (!Downloader.isSupported(candidate)) return false
+        val uri = try { URI(candidate) } catch (_: Exception) { return false }
+        val host = uri.host.orEmpty().lowercase().trimEnd('.')
+        val path = uri.path.orEmpty().trim('/')
+        if (host in setOf("vm.tiktok.com", "vt.tiktok.com")) {
+            return path.isNotBlank() && !path.equals("tiktoklite", ignoreCase = true)
+        }
+        if (host.endsWith("tiktok.com")) {
+            return Regex("^@[^/]+/video/[0-9]+(?:/.*)?$").matches(path) ||
+                Regex("^t/[A-Za-z0-9]+/?$").matches(path) ||
+                Regex("^v/[0-9]+/?$").matches(path)
+        }
+        return true
+    }
+
+    fun extract(text: String): String? {
+        val matches = urls.findAll(text)
+            .map { clean(it.value) }
+            .filter { isMediaLink(it) }
+            .toList()
+        // A TikTok post can contain both a video URL and a TikTok Lite install URL.
+        // The install URL must never be treated as media even when it is the last link.
+        return matches.firstOrNull()
+    }
+
+    fun fromUserInput(text: String): String {
+        // Preserve ordinary editing, but clean up pasted share-caption bundles.
+        val trimmed = text.trim()
+        return if (trimmed.contains('\n') || Regex("https?://", RegexOption.IGNORE_CASE).findAll(trimmed).count() > 1 ||
+            (trimmed.contains(' ') && trimmed.contains("http", ignoreCase = true))) {
+            extract(trimmed) ?: trimmed
+        } else trimmed
+    }
+}
+
+private fun friendlyAnalysisError(e: Exception): String {
+    val message = e.message.orEmpty()
+    return when {
+        message.contains("IP address is blocked", ignoreCase = true) ->
+            "TikTok is refusing this network/IP for this post. ClipPort cannot override that restriction. Try a public post you can open normally in your browser."
+        message.contains("impersonation", ignoreCase = true) ->
+            "TikTok requires browser impersonation not available in this Android yt-dlp build. Try another accessible video or update the downloader engine."
+        message.contains("403") ->
+            "The platform rejected the media request (HTTP 403). Try a different public post or retry later."
+        message.contains("Use a public HTTPS", ignoreCase = true) ->
+            "No valid video URL found. From TikTok Lite, use Share → Copy link, not the promotional TikTok Lite install link."
+        else -> "Analysis failed: ${message.ifBlank { "Unknown error" }.take(240)}"
+    }
 }
 
 class MainActivity : ComponentActivity() {
     private var latestSharedLink by mutableStateOf("")
+    private var invalidShare by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,14 +114,17 @@ class MainActivity : ComponentActivity() {
             SharedLinkParser.extract(intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty()).orEmpty()
         } else ""
         latestSharedLink = initial
-        setContent { PremiumScreen(latestSharedLink) }
+        invalidShare = intent?.action == Intent.ACTION_SEND && initial.isBlank()
+        setContent { PremiumScreen(latestSharedLink, invalidShare) }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == Intent.ACTION_SEND) {
-            SharedLinkParser.extract(intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty())?.let { latestSharedLink = it }
+            val cleaned = SharedLinkParser.extract(intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty())
+            invalidShare = cleaned == null
+            if (cleaned != null) latestSharedLink = cleaned
         }
     }
 }
@@ -95,7 +149,7 @@ private fun PreviewImage(videoId: String?, modifier: Modifier = Modifier, imageU
 }
 
 @Composable
-private fun PremiumScreen(initialUrl: String) {
+private fun PremiumScreen(initialUrl: String, invalidSharedLink: Boolean) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val downloader = remember { Downloader(context.applicationContext) }
     val scope = rememberCoroutineScope()
@@ -112,7 +166,10 @@ private fun PremiumScreen(initialUrl: String) {
     var quality by remember { mutableStateOf("720p") }
     var qualityMenu by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Paste a video or playlist link to get started.") }
+    var status by remember { mutableStateOf(
+        if (invalidSharedLink) "No video URL in this shared text. In TikTok Lite use Share → Copy link, not the TikTok Lite installation link."
+        else "Paste a video or playlist link to get started."
+    ) }
     var update by remember { mutableStateOf<ClipPortRelease?>(null) }
     var updateMessage by remember { mutableStateOf("") }
     var checking by remember { mutableStateOf(false) }
@@ -133,6 +190,12 @@ private fun PremiumScreen(initialUrl: String) {
         }
     }
     LaunchedEffect(Unit) { checkUpdate() }
+    LaunchedEffect(invalidSharedLink) {
+        if (invalidSharedLink) {
+            currentTab = "Discover"
+            status = "No video URL in this shared text. In TikTok Lite use Share → Copy link, not the TikTok Lite installation link."
+        }
+    }
     LaunchedEffect(initialUrl) {
         if (initialUrl.isNotBlank() && initialUrl != url) {
             url = initialUrl
@@ -159,7 +222,7 @@ private fun PremiumScreen(initialUrl: String) {
                     status = "${result.source} video ready"
                 }
             } catch (e: Exception) {
-                status = "Analysis failed: ${e.message ?: "Unknown error"}"
+                status = friendlyAnalysisError(e)
             } finally { busy = false }
         }
     }
@@ -216,8 +279,8 @@ private fun PremiumScreen(initialUrl: String) {
                             }
                         }
                         Text("Discover, select and save videos directly to your phone. No account or remote server required.", color = Subtle, fontSize = 13.sp)
-                        OutlinedTextField(value = url, onValueChange = { url = it; title = ""; mediaThumbnail = null; playlist = null; selected.clear() },
-                            modifier = Modifier.fillMaxWidth(), placeholder = { Text("Paste YouTube, Facebook or TikTok URL") },
+                        OutlinedTextField(value = url, onValueChange = { url = SharedLinkParser.fromUserInput(it); title = ""; mediaThumbnail = null; playlist = null; selected.clear() },
+                            modifier = Modifier.fillMaxWidth(), placeholder = { Text("Paste YouTube, Facebook, TikTok or Instagram URL") },
                             singleLine = true, shape = RoundedCornerShape(15.dp),
                             leadingIcon = { Icon(Icons.Default.Link, contentDescription = null) })
                         Button(onClick = {
@@ -235,7 +298,7 @@ private fun PremiumScreen(initialUrl: String) {
                                         mediaSource = result.source
                                         status = "$mediaSource video ready"
                                     }
-                                } catch (e: Exception) { status = "Analysis failed: ${e.message ?: "Unknown error"}" }
+                                } catch (e: Exception) { status = friendlyAnalysisError(e) }
                                 finally { busy = false }
                             }
                         }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp)) {
@@ -368,7 +431,7 @@ private fun PremiumScreen(initialUrl: String) {
                     }
                 }
                 item {
-                    Text("ClipPort 0.4 beta • Saved to Downloads/ClipPort", color=Subtle,fontSize=11.sp)
+                    Text("ClipPort v1.1.1 • Saved to Downloads/ClipPort", color=Subtle,fontSize=11.sp)
                     Text("Download only media you own or have permission to save.", color=Subtle,fontSize=11.sp)
                     Spacer(Modifier.height(16.dp))
                 }
