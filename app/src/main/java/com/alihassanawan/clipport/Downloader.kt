@@ -35,7 +35,8 @@ class Downloader(private val context: Context) {
                 uri.port == -1 && host in setOf(
                     "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be",
                     "facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com", "fb.watch",
-                    "tiktok.com", "www.tiktok.com", "m.tiktok.com", "vm.tiktok.com", "vt.tiktok.com"
+                    "tiktok.com", "www.tiktok.com", "m.tiktok.com", "vm.tiktok.com", "vt.tiktok.com",
+                    "instagram.com", "www.instagram.com", "m.instagram.com"
                 )
         } catch (_: Exception) { false }
 
@@ -43,6 +44,7 @@ class Downloader(private val context: Context) {
             when (URI(raw.trim()).host.orEmpty().lowercase()) {
                 "youtu.be", "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com" -> "YouTube"
                 "facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com", "fb.watch" -> "Facebook"
+                "instagram.com", "www.instagram.com", "m.instagram.com" -> "Instagram"
                 else -> "TikTok"
             }
         } catch (_: Exception) { "Video" }
@@ -91,8 +93,15 @@ class Downloader(private val context: Context) {
     }
 
     suspend fun analyzeMedia(url: String): MediaPreview = withContext(Dispatchers.IO) {
-        require(isSupported(url)) { "Enter a public HTTPS YouTube, Facebook or TikTok link" }
+        require(isSupported(url)) { "Enter a public HTTPS YouTube, Facebook, TikTok or Instagram link" }
         ensureEngineReady()
+        // Public single-photo posts may have no yt-dlp video formats. The fallback
+        // reads only public OG image metadata, without cookies or account access.
+        if (source(url) == "Instagram") {
+            runCatching { InstagramPhoto.inspect(url) }.getOrNull()?.let { photo ->
+                return@withContext MediaPreview(photo.title, photo.imageUrl, "Instagram")
+            }
+        }
         val request = YoutubeDLRequest(url)
         request.addOption("--no-playlist")
         request.addOption("--skip-download")
@@ -177,8 +186,15 @@ class Downloader(private val context: Context) {
     }
 
     suspend fun download(url: String, choice: String, onProgress: (Float) -> Unit, processId: String = UUID.randomUUID().toString()): String = withContext(Dispatchers.IO) {
-        require(isSupported(url)) { "Invalid YouTube URL" }
+        require(isSupported(url)) { "Invalid or unsupported media URL" }
         ensureEngineReady()
+        if (source(url) == "Instagram") {
+            runCatching { InstagramPhoto.inspect(url) }.getOrNull()?.let { photo ->
+                val saved = InstagramPhoto.save(context, photo)
+                onProgress(100f)
+                return@withContext saved
+            }
+        }
         val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
             ?: error("App download storage unavailable")
         val taskDir = File(baseDir, "tasks/${UUID.randomUUID()}")

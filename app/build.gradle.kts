@@ -10,8 +10,8 @@ android {
         applicationId = "com.alihassanawan.clipport"
         minSdk = 29
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.0.0"
+        versionCode = 7
+        versionName = "1.1.0-beta"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
     buildTypes { release { isMinifyEnabled = false } }
@@ -24,6 +24,7 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.foundation:foundation")
