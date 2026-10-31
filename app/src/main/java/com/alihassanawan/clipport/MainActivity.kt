@@ -107,6 +107,7 @@ private fun friendlyAnalysisError(e: Exception): String {
 class MainActivity : ComponentActivity() {
     private var latestSharedLink by mutableStateOf("")
     private var invalidShare by mutableStateOf(false)
+    private var shareRevision by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -115,7 +116,8 @@ class MainActivity : ComponentActivity() {
         } else ""
         latestSharedLink = initial
         invalidShare = intent?.action == Intent.ACTION_SEND && initial.isBlank()
-        setContent { PremiumScreen(latestSharedLink, invalidShare) }
+        shareRevision += 1
+        setContent { PremiumScreen(latestSharedLink, invalidShare, shareRevision) }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -124,7 +126,8 @@ class MainActivity : ComponentActivity() {
         if (intent.action == Intent.ACTION_SEND) {
             val cleaned = SharedLinkParser.extract(intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty())
             invalidShare = cleaned == null
-            if (cleaned != null) latestSharedLink = cleaned
+            latestSharedLink = cleaned.orEmpty()
+            shareRevision += 1
         }
     }
 }
@@ -149,14 +152,13 @@ private fun PreviewImage(videoId: String?, modifier: Modifier = Modifier, imageU
 }
 
 @Composable
-private fun PremiumScreen(initialUrl: String, invalidSharedLink: Boolean) {
+private fun PremiumScreen(initialUrl: String, invalidSharedLink: Boolean, shareRevision: Int) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val downloader = remember { Downloader(context.applicationContext) }
     val scope = rememberCoroutineScope()
     val jobs by DownloadQueue.items.collectAsState()
     val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     var currentTab by remember { mutableStateOf("Discover") }
-    var pendingShared by remember { mutableStateOf(initialUrl.isNotBlank()) }
     var url by remember { mutableStateOf(initialUrl) }
     var title by remember { mutableStateOf("") }
     var mediaThumbnail by remember { mutableStateOf<String?>(null) }
@@ -196,34 +198,39 @@ private fun PremiumScreen(initialUrl: String, invalidSharedLink: Boolean) {
             status = "No video URL in this shared text. In TikTok Lite use Share → Copy link, not the TikTok Lite installation link."
         }
     }
-    LaunchedEffect(initialUrl) {
-        if (initialUrl.isNotBlank() && initialUrl != url) {
+    // Analyze once per share event. Do not key this effect to state mutated inside it:
+    // Mutating effect keys while suspended previously cancelled yt-dlp mid-analysis.
+    LaunchedEffect(shareRevision) {
+        if (initialUrl.isNotBlank()) {
             url = initialUrl
-            pendingShared = true
             currentTab = "Discover"
-        }
-    }
-    // Share intent initiates analysis once; no automatic download starts.
-    LaunchedEffect(pendingShared, url) {
-        if (pendingShared && url.isNotBlank() && !busy) {
-            pendingShared = false
             busy = true
             status = "Analyzing shared link..."
-            title = ""; playlist = null; selected.clear()
+            title = ""
+            mediaThumbnail = null
+            playlist = null
+            selected.clear()
             try {
-                if (Downloader.isPlaylist(url)) {
-                    val p = downloader.analyzePlaylist(url)
-                    playlist = p; selected.addAll(p.videos.map { it.id })
+                if (Downloader.isPlaylist(initialUrl)) {
+                    val p = downloader.analyzePlaylist(initialUrl)
+                    playlist = p
+                    selected.addAll(p.videos.map { it.id })
                     status = "${p.videos.size} playlist videos ready"
                 } else {
-                    val result = downloader.analyzeMedia(url)
-                    title = result.title; mediaThumbnail = result.thumbnail
+                    val result = downloader.analyzeMedia(initialUrl)
+                    title = result.title
+                    mediaThumbnail = result.thumbnail
                     mediaSource = result.source
                     status = "${result.source} video ready"
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // A newer share superseded this request or the Activity was destroyed.
+                throw e
             } catch (e: Exception) {
                 status = friendlyAnalysisError(e)
-            } finally { busy = false }
+            } finally {
+                busy = false
+            }
         }
     }
     MaterialTheme(colorScheme = darkColorScheme(primary = Violet, secondary = Cyan,
@@ -245,20 +252,20 @@ private fun PremiumScreen(initialUrl: String, invalidSharedLink: Boolean) {
                     }
                 }
                 item {
-                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(20.dp)).padding(5.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("Discover", "Downloads").forEach { tab ->
+                    Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(20.dp)).padding(5.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        listOf("Discover", "Downloads", "Statuses").forEach { tab ->
                             val active = currentTab == tab
                             Surface(
                                 modifier = Modifier.weight(1f).clickable { currentTab = tab },
                                 shape = RoundedCornerShape(16.dp),
                                 color = if (active) Violet else Color.Transparent
                             ) {
-                                Row(Modifier.padding(vertical = 13.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(if (tab == "Discover") Icons.Default.Explore else Icons.Default.Downloading,
-                                        contentDescription = null, modifier = Modifier.size(18.dp),
+                                Row(Modifier.padding(vertical = 12.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(when (tab) { "Discover" -> Icons.Default.Explore; "Downloads" -> Icons.Default.Downloading; else -> Icons.Default.FolderOpen },
+                                        contentDescription = null, modifier = Modifier.size(16.dp),
                                         tint = if (active) Night else Subtle)
-                                    Spacer(Modifier.width(7.dp))
-                                    Text(tab, fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(tab, fontWeight = FontWeight.SemiBold, fontSize = 11.sp,
                                         color = if (active) Night else Subtle)
                                     if (tab == "Downloads" && jobs.any { it.state in setOf("Queued", "Downloading") }) {
                                         Spacer(Modifier.width(5.dp)); Text("•", color = if (active) Night else Cyan)
@@ -431,7 +438,7 @@ private fun PremiumScreen(initialUrl: String, invalidSharedLink: Boolean) {
                     }
                 }
                 item {
-                    Text("ClipPort v1.1.1 • Saved to Downloads/ClipPort", color=Subtle,fontSize=11.sp)
+                    Text("ClipPort v1.1.3 • Saved to Downloads/ClipPort", color=Subtle,fontSize=11.sp)
                     Text("Download only media you own or have permission to save.", color=Subtle,fontSize=11.sp)
                     Spacer(Modifier.height(16.dp))
                 }

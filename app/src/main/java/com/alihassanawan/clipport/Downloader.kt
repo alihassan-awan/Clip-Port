@@ -57,16 +57,19 @@ class Downloader(private val context: Context) {
         } catch (_: Exception) { false }
     }
 
-    private fun ensureEngineReady() {
+    /**
+     * Analysis must not wait for a potentially slow network yt-dlp update check.
+     * Preserve automatic engine updates for the first download in this process.
+     */
+    private fun ensureEngineReady(checkForUpdates: Boolean = false) {
         synchronized(engineLock) {
             val engine = YoutubeDL.getInstance()
             engine.init(context.applicationContext)
-            if (!updateAttempted) {
+            if (checkForUpdates && !updateAttempted) {
                 updateAttempted = true
                 try {
                     Log.i(TAG, "yt-dlp update: ${engine.updateYoutubeDL(context.applicationContext, YoutubeDL.UpdateChannel.STABLE)}")
                 } catch (e: Exception) {
-                    // Do not confuse a failed update check with a successful update.
                     Log.w(TAG, "yt-dlp update unavailable; using bundled version", e)
                 }
             }
@@ -187,7 +190,7 @@ class Downloader(private val context: Context) {
 
     suspend fun download(url: String, choice: String, onProgress: (Float) -> Unit, processId: String = UUID.randomUUID().toString()): String = withContext(Dispatchers.IO) {
         require(isSupported(url)) { "Invalid or unsupported media URL" }
-        ensureEngineReady()
+        ensureEngineReady(checkForUpdates = true)
         if (source(url) == "Instagram") {
             runCatching { InstagramPhoto.inspect(url) }.getOrNull()?.let { photo ->
                 val saved = InstagramPhoto.save(context, photo)

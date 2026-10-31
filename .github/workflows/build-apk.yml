@@ -2,6 +2,8 @@ name: Build ClipPort Debug APK
 on:
   push:
     branches: [main, master]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 jobs:
   android:
@@ -29,6 +31,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ClipPort-Phase2a-Debug-APK
+          name: ClipPort-AutoAnalyze-Fix-Debug-APK
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
