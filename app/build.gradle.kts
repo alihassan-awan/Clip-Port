@@ -10,8 +10,8 @@ android {
         applicationId = "com.alihassanawan.clipport"
         minSdk = 29
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.1.1-beta"
+        versionCode = 9
+        versionName = "1.1.2-beta"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
     buildTypes { release { isMinifyEnabled = false } }
